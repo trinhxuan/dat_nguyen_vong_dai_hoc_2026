@@ -200,8 +200,8 @@ function renderResults(){
   const limit = Number($('limitSelect').value)||25;
   const rows = rowsAll.slice(0,limit);
   $('resultNote').innerHTML = 'Đang hiển thị <b>'+rows.length+'</b>/<b>'+rowsAll.length+'</b> dòng. Chế độ: <b>'+esc($('modeSelect').selectedOptions[0].textContent)+'</b>.';
-  $('resultTable').innerHTML = '<thead><tr><th>#</th><th>Trường</th><th>Mã</th><th>Ngành/chương trình</th><th>ĐC 2023</th><th>ĐC 2024</th><th>ĐC 2025</th><th>Điểm quy đổi</th><th>Mục tiêu 2026</th><th>Chênh lệch</th><th>Khả năng</th><th>Ghi chú</th></tr></thead><tbody>'+
-    rows.map((r,i)=>'<tr><td>'+(i+1)+'</td><td><b>'+esc(r.schoolCode)+'</b><br><span class="small">'+esc(r.schoolName)+'</span></td><td>'+esc(r.admissionCode||'—')+'<br><span class="small">'+esc(r.majorCode||'—')+'</span></td><td><b>'+esc(r.name)+'</b><br><span class="small">'+esc(r.combos||'')+'</span></td><td>—</td><td>—</td><td><b>'+fmt(r.cutoff)+'</b></td><td><b>'+fmt(r.conv.score)+'</b></td><td>'+fmt(r.target)+'</td><td><b>'+fmt(r.diff)+'</b></td><td><span class="risk '+r.ability.key+'">'+esc(r.ability.text)+'</span></td><td><span class="small">'+esc(r.conv.note||'')+'</span></td></tr>').join('')+
+  $('resultTable').innerHTML = '<thead><tr><th>#</th><th>Trường</th><th>Mã</th><th>Ngành/chương trình</th><th>ĐC 2023</th><th>ĐC 2024</th><th>ĐC 2025</th><th>Điểm quy đổi</th><th>Mục tiêu 2026</th><th>Chênh lệch</th><th>Khả năng</th><th>Ghi chú</th><th class="no-print">Thao tác</th></tr></thead><tbody>'+
+    rows.map((r,i)=>'<tr><td>'+(i+1)+'</td><td><b>'+esc(r.schoolCode)+'</b><br><span class="small">'+esc(r.schoolName)+'</span></td><td>'+esc(r.admissionCode||'—')+'<br><span class="small">'+esc(r.majorCode||'—')+'</span></td><td><b>'+esc(r.name)+'</b><br><span class="small">'+esc(r.combos||'')+'</span></td><td>—</td><td>—</td><td><b>'+fmt(r.cutoff)+'</b></td><td><b>'+fmt(r.conv.score)+'</b></td><td>'+fmt(r.target)+'</td><td><b>'+fmt(r.diff)+'</b></td><td><span class="risk '+r.ability.key+'">'+esc(r.ability.text)+'</span></td><td><span class="small">'+esc(r.conv.note||'')+'</span></td><td class="no-print"><button class="btn mini primary" data-addwish="'+esc(r.id)+'">Thêm NV</button></td></tr>').join('')+
     '</tbody>';
 }
 function renderFormula(){
@@ -235,6 +235,135 @@ function renderBands(){
   const rankRows = Object.keys(HSA2026_RANK_TABLES).map(k=>{ const r=rankFromHsa(hsa,k); return '<tr><td>'+esc(HSA2026_RANK_TABLES[k].label)+'</td><td>'+fmt(r?.p,2)+'%</td><td>'+fmt(r?.top,2)+'%</td><td>'+esc(HSA2026_RANK_TABLES[k].n)+'</td></tr>'; }).join('');
   $('hsaPreview').innerHTML = '<div class="table-wrap"><table class="mini-table"><thead><tr><th>Bảng</th><th>Phân vị</th><th>Top</th><th>N</th></tr></thead><tbody>'+rankRows+'</tbody></table></div>';
 }
+
+const WISH_KEY = 'admission_edge_hsa_2026_wishlist_v2';
+let wishlist = [];
+
+function loadWishlist(){
+  try{
+    const raw = localStorage.getItem(WISH_KEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    return Array.isArray(arr) ? arr.filter(x=>x && x.id) : [];
+  }catch(e){ return []; }
+}
+function persistWishlist(){
+  localStorage.setItem(WISH_KEY, JSON.stringify(wishlist));
+}
+function findProgram(id){
+  return PROGRAMS.find(p => p.id===id || p.admissionCode===id || p.majorCode===id);
+}
+function findProgramsByText(text){
+  const q = String(text||'').trim().toLowerCase();
+  if(!q) return [];
+  return PROGRAMS.filter(p => [p.id,p.schoolCode,p.schoolName,p.admissionCode,p.majorCode,p.name,p.methods,p.combos].some(x => String(x??'').toLowerCase().includes(q)));
+}
+function addWishlist(id, options={}){
+  const p = findProgram(id);
+  if(!p){ alert('Không tìm thấy ngành/mã này trong dữ liệu.'); return; }
+  if(wishlist.some(w=>w.id===p.id)){ alert('Ngành này đã có trong danh sách nguyện vọng.'); return; }
+  wishlist.push({
+    id:p.id,
+    method:options.method || $('wishMethodSelect')?.value || currentInput().method || 'HSA',
+    note:options.note || $('wishDefaultNote')?.value || '',
+    createdAt:new Date().toISOString()
+  });
+  persistWishlist();
+  renderWishlist();
+}
+function removeWishlist(index){
+  wishlist.splice(index,1);
+  persistWishlist();
+  renderWishlist();
+}
+function moveWishlist(index,delta){
+  const ni = index + delta;
+  if(ni<0 || ni>=wishlist.length) return;
+  const [item] = wishlist.splice(index,1);
+  wishlist.splice(ni,0,item);
+  persistWishlist();
+  renderWishlist();
+}
+function updateWish(index,key,value){
+  if(!wishlist[index]) return;
+  wishlist[index][key]=value;
+  persistWishlist();
+  renderWishlistSummary();
+}
+function wishlistRows(){
+  const state=currentInput();
+  return wishlist.map((w,i)=>{
+    const p=findProgram(w.id);
+    if(!p) return {missing:true, wish:w, index:i};
+    const methodState = {...state, method:w.method==='THPT'?'THPT':'HSA'};
+    const conv = scoreForProgram(p, methodState);
+    const cutoff = num(p.cutoff2025);
+    const target = targetCutoff(p,state.shift);
+    const diff = Number.isFinite(conv.score) && Number.isFinite(target) ? conv.score-target : NaN;
+    const ab = ability(diff, conv.score, target);
+    return {...p, wish:w, index:i, conv, cutoff, target, diff, ability:ab};
+  });
+}
+function renderWishlistSummary(){
+  if(!$('wishlistSummary')) return;
+  const rows = wishlistRows().filter(r=>!r.missing);
+  const high = rows.filter(r=>['high','good'].includes(r.ability.key)).length;
+  const close = rows.filter(r=>r.ability.key==='close').length;
+  const bad = rows.filter(r=>['low','bad'].includes(r.ability.key)).length;
+  const avgDiff = rows.filter(r=>Number.isFinite(r.diff)).reduce((s,r)=>s+r.diff,0) / Math.max(1, rows.filter(r=>Number.isFinite(r.diff)).length);
+  $('wishlistSummary').innerHTML = [
+    {label:'Tổng NV đã lưu', value:rows.length, sub:'Lưu tự động bằng localStorage'},
+    {label:'Nhóm cơ hội tốt', value:high, sub:'Khả năng đỗ cao + có cơ hội tốt'},
+    {label:'Sát điểm chuẩn', value:close, sub:'Cần cân nhắc thứ tự ưu tiên'},
+    {label:'Biên độ trung bình', value:fmt(avgDiff), sub:'So với mục tiêu/stress-test 2026'}
+  ].map(x=>'<div class="wish-card"><div class="label">'+esc(x.label)+'</div><div class="value">'+esc(x.value)+'</div><div class="small">'+esc(x.sub)+'</div></div>').join('');
+}
+function renderWishlist(){
+  if(!$('wishTable')) return;
+  renderWishlistSummary();
+  const rows = wishlistRows();
+  $('wishEmpty').classList.toggle('hidden', rows.length>0);
+  $('wishTableWrap').classList.toggle('hidden', rows.length===0);
+  $('printMeta').textContent = 'Ngày in: ' + new Date().toLocaleString('vi-VN') + ' · Tổng số nguyện vọng: ' + rows.length;
+
+  $('wishTable').innerHTML = '<thead><tr><th>NV</th><th>Trường</th><th>Mã</th><th>Ngành/chương trình</th><th>Phương thức</th><th>ĐC 2025</th><th>Điểm quy đổi</th><th>Mục tiêu 2026</th><th>Chênh lệch</th><th>Khả năng</th><th>Ghi chú</th><th class="no-print">Sửa</th></tr></thead><tbody>'+
+    rows.map((r,i)=>{
+      if(r.missing) return '<tr><td><div class="wish-rank">'+(i+1)+'</div></td><td colspan="10">Không tìm thấy dữ liệu ngành: '+esc(r.wish.id)+'</td><td class="no-print"><button class="btn mini danger" data-wishremove="'+i+'">Xóa</button></td></tr>';
+      return '<tr><td><div class="wish-rank">'+(i+1)+'</div></td><td><b>'+esc(r.schoolCode)+'</b><br><span class="small">'+esc(r.schoolName)+'</span></td><td>'+esc(r.admissionCode||'—')+'<br><span class="small">'+esc(r.majorCode||'—')+'</span></td><td><b>'+esc(r.name)+'</b><br><span class="small">'+esc(r.combos||'')+'</span></td><td><select class="wish-select no-print" data-wishmethod="'+i+'"><option value="HSA" '+(r.wish.method==='HSA'?'selected':'')+'>HSA</option><option value="THPT" '+(r.wish.method==='THPT'?'selected':'')+'>THPT</option><option value="HB" '+(r.wish.method==='HB'?'selected':'')+'>Học bạ/KH</option></select><span class="small">'+esc(r.wish.method||'HSA')+'</span></td><td><b>'+fmt(r.cutoff)+'</b></td><td><b>'+fmt(r.conv.score)+'</b></td><td>'+fmt(r.target)+'</td><td><b>'+fmt(r.diff)+'</b></td><td><span class="risk '+r.ability.key+'">'+esc(r.ability.text)+'</span></td><td><input class="wish-note no-print" data-wishnote="'+i+'" value="'+esc(r.wish.note||'')+'" placeholder="Ghi chú"><span class="small">'+esc(r.wish.note||'')+'</span></td><td class="no-print"><div class="wish-tools"><button class="btn mini" data-wishmove="'+i+'" data-delta="-1">↑</button><button class="btn mini" data-wishmove="'+i+'" data-delta="1">↓</button><button class="btn mini" data-wishtop="'+i+'">NV1</button><button class="btn mini danger" data-wishremove="'+i+'">Xóa</button></div></td></tr>';
+    }).join('')+'</tbody>';
+}
+function seedWishlistFromResults(){
+  const rows = makeRows().slice(0,15);
+  let added=0;
+  for(const r of rows){
+    if(!wishlist.some(w=>w.id===r.id)){
+      wishlist.push({id:r.id, method:currentInput().method, note:'Tạo mẫu từ kết quả lọc', createdAt:new Date().toISOString()});
+      added++;
+    }
+  }
+  persistWishlist(); renderWishlist();
+  alert('Đã thêm '+added+' nguyện vọng từ kết quả lọc hiện tại.');
+}
+function addQuickWishlist(){
+  const q = $('wishQuickInput').value;
+  const matches = findProgramsByText(q);
+  if(!matches.length){ alert('Không tìm thấy ngành phù hợp.'); return; }
+  addWishlist(matches[0].id, {method:$('wishMethodSelect').value, note:$('wishDefaultNote').value});
+  $('wishQuickInput').value='';
+}
+function exportWishlistCsv(){
+  const rows = wishlistRows().filter(r=>!r.missing);
+  const header = ['NV','Trường','Mã xét tuyển','Mã ngành','Ngành','Phương thức','Điểm chuẩn 2025','Điểm quy đổi','Mục tiêu 2026','Chênh lệch','Khả năng','Ghi chú'];
+  const csv = [header, ...rows.map((r,i)=>[i+1,r.schoolCode,r.admissionCode,r.majorCode,r.name,r.wish.method,fmt(r.cutoff),fmt(r.conv.score),fmt(r.target),fmt(r.diff),r.ability.text,r.wish.note])].map(row=>row.map(v=>'"'+String(v??'').replaceAll('"','""')+'"').join(',')).join('\n');
+  const blob = new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='danh_sach_nguyen_vong_admission_edge.csv'; a.click(); URL.revokeObjectURL(a.href);
+}
+function printWishlist(){
+  document.body.classList.add('print-wishlist');
+  window.print();
+  setTimeout(()=>document.body.classList.remove('print-wishlist'),500);
+}
+
+
 function renderData(){
   const q = $('dataSearch').value.trim().toLowerCase();
   const school = $('dataSchool').value;
@@ -260,7 +389,7 @@ function renderAll(){
   $('comboSelect').closest('.field').classList.toggle('hidden', !hsaMode);
   $('modeSelect').closest('.field').classList.toggle('hidden', !hsaMode);
   $('ptitFloorInput').closest('.field').classList.toggle('hidden', !hsaMode);
-  renderResults(); renderFormula(); renderBands(); renderData();
+  renderResults(); renderFormula(); renderBands(); renderData(); renderWishlist();
 }
 function exportCsv(){
   const rows = makeRows();
