@@ -1,0 +1,19 @@
+{
+  "name": "admission-edge-hsa-2026",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Static web app for HSA/THPT percentile-based conversion and admission strategy.",
+  "scripts": {
+    "start": "python -m http.server 5173",
+    "check": "node --check extracted-app.js"
+  },
+  "keywords": [
+    "hsa",
+    "tuyen-sinh",
+    "admission",
+    "percentile",
+    "vietnam"
+  ],
+  "author": "Trinh Xuan",
+  "license": "UNLICENSED"
+}
