@@ -329,6 +329,151 @@ function renderBands(){
   $('hsaPreview').innerHTML = '<div class="table-wrap"><table class="mini-table"><thead><tr><th>Bảng</th><th>Phân vị</th><th>Top</th><th>N</th></tr></thead><tbody>'+rankRows+'</tbody></table></div>';
 }
 
+
+const THPT_COMBOS = {
+  A00: {label:'A00', subjects:['math','phys','chem'], text:'Toán · Lý · Hóa'},
+  A01: {label:'A01', subjects:['math','phys','eng'], text:'Toán · Lý · Anh'},
+  B00: {label:'B00', subjects:['math','chem','bio'], text:'Toán · Hóa · Sinh'},
+  C00: {label:'C00', subjects:['lit','his','geo'], text:'Văn · Sử · Địa'},
+  D01: {label:'D01', subjects:['math','lit','eng'], text:'Toán · Văn · Anh'},
+  D07: {label:'D07', subjects:['math','chem','eng'], text:'Toán · Hóa · Anh'},
+  C14: {label:'C14', subjects:['lit','math','civic'], text:'Văn · Toán · GDCD'},
+  C19: {label:'C19', subjects:['lit','his','civic'], text:'Văn · Sử · GDCD'},
+  C20: {label:'C20', subjects:['lit','geo','civic'], text:'Văn · Địa · GDCD'}
+};
+const SUBJECT_INPUTS = {math:'subMath', phys:'subPhys', chem:'subChem', bio:'subBio', lit:'subLit', eng:'subEng', his:'subHis', geo:'subGeo', civic:'subCivic'};
+let lastThptStrategyRows = [];
+
+function getSubjectScores(){
+  const out={};
+  Object.entries(SUBJECT_INPUTS).forEach(([k,id])=>out[k]=Number($(id)?.value || 0));
+  out.priority = Number($('priorityScore')?.value || 0);
+  return out;
+}
+function calcComboScores(){
+  const s=getSubjectScores();
+  const rows={};
+  Object.entries(THPT_COMBOS).forEach(([code,c])=>{
+    const raw = c.subjects.reduce((sum,k)=>sum+(Number(s[k])||0),0);
+    const total = Math.min(30, raw + (Number(s.priority)||0));
+    rows[code] = {code, label:c.label, text:c.text, raw, total, priority:s.priority};
+  });
+  return rows;
+}
+function bestComboForProgram(p, combos){
+  const text = String(p.combos || '').toUpperCase();
+  let candidates = Object.keys(combos).filter(c => text.includes(c));
+  if(!candidates.length){
+    if(p.schoolCode==='YHB') candidates = ['B00'];
+    else if(['QHI','QHT','BVH','DCN'].includes(p.schoolCode)) candidates = ['A00','A01','D07'];
+    else if(['KHA'].includes(p.schoolCode)) candidates = ['A00','A01','D01','D07'];
+    else if(['SPH','SP2'].includes(p.schoolCode)) candidates = ['A00','A01','B00','C00','D01','C14','C19','C20'];
+    else candidates = ['A00','A01','D01'];
+  }
+  candidates = candidates.filter(c => combos[c]);
+  if(!candidates.length) candidates = [$('mainComboSelect')?.value || 'A00'];
+  candidates.sort((a,b)=>combos[b].total-combos[a].total);
+  return combos[candidates[0]];
+}
+function thptAbility(diff){
+  if(!Number.isFinite(diff)) return {key:'none', text:'Chưa có dữ liệu'};
+  if(diff>=1.25) return {key:'high', text:'An toàn/ưu tiên tốt'};
+  if(diff>=0.50) return {key:'good', text:'Cơ hội tốt'};
+  if(diff>=-0.30) return {key:'close', text:'Sát điểm chuẩn'};
+  if(diff>=-1.00) return {key:'low', text:'Thử sức/cân nhắc'};
+  return {key:'bad', text:'Rất khó'};
+}
+function thptRows(){
+  const combos=calcComboScores();
+  const school = $('strategySchoolSelect')?.value || 'ALL';
+  const shift = Number($('shiftInput')?.value || 0);
+  let rows = PROGRAMS.filter(p => school==='ALL' || p.schoolCode===school);
+  rows = rows.map(p=>{
+    const combo = bestComboForProgram(p,combos);
+    const cutoff = num(p.cutoff2025);
+    const target = Number.isFinite(cutoff) ? cutoff * (1+shift/100) : NaN;
+    const diff = Number.isFinite(target) ? combo.total - target : NaN;
+    const ab = thptAbility(diff);
+    return {...p, thptCombo:combo, thptScore:combo.total, target, diff, ability:ab};
+  }).sort((a,b)=>{
+    const order = {high:0, good:1, close:2, low:3, bad:4, none:5};
+    if(order[a.ability.key] !== order[b.ability.key]) return order[a.ability.key]-order[b.ability.key];
+    return (Number.isFinite(b.diff)?b.diff:-999)-(Number.isFinite(a.diff)?a.diff:-999);
+  });
+  return rows;
+}
+function buildThptStrategy15(){
+  const rows=thptRows();
+  const buckets = {
+    reach: rows.filter(r=>['low','close'].includes(r.ability.key)).slice(0,5),
+    focus: rows.filter(r=>['good','close'].includes(r.ability.key)).slice(0,6),
+    safe: rows.filter(r=>r.ability.key==='high').slice(0,4)
+  };
+  let picked = [...buckets.reach, ...buckets.focus, ...buckets.safe];
+  const seen = new Set();
+  picked = picked.filter(r => !seen.has(r.id) && seen.add(r.id));
+  for(const r of rows){
+    if(picked.length>=15) break;
+    if(!seen.has(r.id)){picked.push(r); seen.add(r.id);}
+  }
+  return picked.slice(0,15);
+}
+function renderComboScoreCards(){
+  if(!$('comboScoreCards')) return;
+  const combos=calcComboScores();
+  $('comboScoreCards').innerHTML = Object.values(combos).map(c=>`
+    <div class="combo-card">
+      <div class="combo-name">${esc(c.label)}</div>
+      <div class="combo-score">${fmt(c.total,2)}</div>
+      <div class="combo-sub">${esc(c.text)}<br>Điểm gốc: ${fmt(c.raw,2)} · Ưu tiên: ${fmt(c.priority,2)}</div>
+    </div>`).join('');
+}
+function renderThptStrategy(){
+  if(!$('thptStrategyTable')) return;
+  renderComboScoreCards();
+  const rows = thptRows();
+  lastThptStrategyRows = buildThptStrategy15();
+  const high = rows.filter(r=>r.ability.key==='high').length;
+  const good = rows.filter(r=>r.ability.key==='good').length;
+  const close = rows.filter(r=>r.ability.key==='close').length;
+  const mainCombo = calcComboScores()[$('mainComboSelect')?.value || 'A00'];
+  $('thptStrategySummary').innerHTML = [
+    {k:'Tổ hợp chính',v:mainCombo?.code || '—',s:`${mainCombo?.text || ''} · ${fmt(mainCombo?.total,2)}`},
+    {k:'Ngành an toàn',v:high,s:'Biên độ ≥ +1,25'},
+    {k:'Ngành cơ hội tốt',v:good,s:'Biên độ +0,50 đến +1,24'},
+    {k:'Ngành sát điểm',v:close,s:'Biên độ -0,30 đến +0,49'}
+  ].map(x=>`<div class="strategy-tile"><span class="small">${esc(x.k)}</span><b>${esc(x.v)}</b><span class="small">${esc(x.s)}</span></div>`).join('');
+
+  $('thptStrategyTable').innerHTML = '<thead><tr><th>NV gợi ý</th><th>Trường</th><th>Mã</th><th>Ngành</th><th>Tổ hợp mạnh nhất</th><th>Điểm THPT 2026</th><th>ĐC 2025</th><th>Mục tiêu 2026</th><th>Chênh lệch</th><th>Nhóm chiến thuật</th><th class="no-print">Thao tác</th></tr></thead><tbody>'+
+    lastThptStrategyRows.map((r,i)=>`<tr><td><div class="wish-rank">${i+1}</div></td><td><b>${esc(r.schoolCode)}</b><br><span class="small">${esc(r.schoolName)}</span></td><td>${esc(r.admissionCode||'—')}<br><span class="small">${esc(r.majorCode||'—')}</span></td><td><b>${esc(r.name)}</b><br><span class="small">${esc(r.combos||'')}</span></td><td><span class="subject-pill">${esc(r.thptCombo.code)}</span><br><span class="small">${esc(r.thptCombo.text)}</span></td><td><b>${fmt(r.thptScore,2)}</b></td><td>${fmt(r.cutoff2025,2)}</td><td>${fmt(r.target,2)}</td><td><b>${fmt(r.diff,2)}</b></td><td><span class="thpt-band ${r.ability.key==='high'?'safe':r.ability.key==='good'?'match':r.ability.key==='close'?'reach':'hard'}">${esc(r.ability.text)}</span></td><td class="no-print"><button class="btn mini primary" data-addwish="${esc(r.id)}">Thêm NV</button></td></tr>`).join('')+
+    '</tbody>';
+}
+function saveThptStrategyToWishlist(){
+  if(!lastThptStrategyRows.length) renderThptStrategy();
+  let added=0;
+  for(const r of lastThptStrategyRows){
+    if(!wishlist.some(w=>w.id===r.id)){
+      wishlist.push({id:r.id, method:'THPT', note:`THPT 2026: ${r.thptCombo.code} ${fmt(r.thptScore,2)} · ${r.ability.text}`, createdAt:new Date().toISOString()});
+      added++;
+    }
+  }
+  persistWishlist();
+  renderWishlist();
+  alert('Đã lưu thêm '+added+' nguyện vọng THPT vào danh sách.');
+}
+function exportThptStrategyCsv(){
+  if(!lastThptStrategyRows.length) renderThptStrategy();
+  const header=['NV','Trường','Mã xét tuyển','Mã ngành','Ngành','Tổ hợp','Điểm THPT 2026','Điểm chuẩn 2025','Mục tiêu 2026','Chênh lệch','Nhóm chiến thuật'];
+  const csv=[header,...lastThptStrategyRows.map((r,i)=>[i+1,r.schoolCode,r.admissionCode,r.majorCode,r.name,r.thptCombo.code,fmt(r.thptScore,2),fmt(r.cutoff2025,2),fmt(r.target,2),fmt(r.diff,2),r.ability.text])].map(row=>row.map(v=>`"${String(v??'').replaceAll('"','""')}"`).join(',')).join('\n');
+  const blob=new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='chien_thuat_thpt_2026.csv'; a.click(); URL.revokeObjectURL(a.href);
+}
+function printThptStrategy(){
+  document.querySelector('.tab[data-tab="thpt2026"]')?.click();
+  setTimeout(()=>window.print(),100);
+}
+
+
 const WISH_KEY = 'admission_edge_hsa_2026_wishlist_v2';
 let wishlist = [];
 
@@ -473,6 +618,7 @@ function populate(){
   const opts=schools.map(s=>'<option value="'+s+'">'+esc((SCHOOL_META[s]?.short||s)+' — '+(SCHOOL_META[s]?.name||s))+'</option>').join('');
   $('schoolSelect').innerHTML=opts;
   $('dataSchool').innerHTML=opts;
+  if($('strategySchoolSelect')) $('strategySchoolSelect').innerHTML=opts;
 }
 function renderAll(){
   $('shiftText').textContent = (Number($('shiftInput').value)>0?'+':'') + fmt(Number($('shiftInput').value),2)+'%';
@@ -482,7 +628,7 @@ function renderAll(){
   $('comboSelect').closest('.field').classList.toggle('hidden', !hsaMode);
   $('modeSelect').closest('.field').classList.toggle('hidden', !hsaMode);
   $('ptitFloorInput').closest('.field').classList.toggle('hidden', !hsaMode);
-  renderResults(); renderFormula(); renderMoet(); renderBands(); renderData(); renderWishlist();
+  renderResults(); renderFormula(); renderMoet(); renderBands(); renderData(); renderWishlist(); renderThptStrategy();
 }
 function exportCsv(){
   const rows = makeRows();
@@ -500,7 +646,7 @@ document.querySelectorAll('[data-quick]').forEach(btn=>btn.addEventListener('cli
   document.querySelectorAll('[data-quick]').forEach(x=>x.classList.remove('active'));
   btn.classList.add('active'); $('abilitySelect').value=btn.dataset.quick; renderResults();
 }));
-['schoolSelect','methodSelect','scoreInput','rankTableSelect','comboSelect','modeSelect','shiftInput','ptitFloorInput','searchBox','abilitySelect','sortSelect','limitSelect','moetThptInput','moetHsaInput'].forEach(id=>$(id)?.addEventListener('input',renderAll));
+['schoolSelect','methodSelect','scoreInput','rankTableSelect','comboSelect','modeSelect','shiftInput','ptitFloorInput','searchBox','abilitySelect','sortSelect','limitSelect','moetThptInput','moetHsaInput','subMath','subPhys','subChem','subBio','subLit','subEng','subHis','subGeo','subCivic','priorityScore','mainComboSelect','strategySchoolSelect'].forEach(id=>$(id)?.addEventListener('input',renderAll));
 ['dataSearch','dataSchool','dataStatus'].forEach(id=>$(id)?.addEventListener('input',renderData));
 $('lookupBtn').onclick=renderAll; $('dataBtn').onclick=renderData; $('csvBtn').onclick=exportCsv;
 $('themeBtn').onclick=()=>{document.body.dataset.theme=document.body.dataset.theme==='dark'?'light':'dark'};
